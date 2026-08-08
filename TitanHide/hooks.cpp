@@ -386,6 +386,115 @@ static NTSTATUS NTAPI HookNtQuerySystemInformation(
             }
             break;
         }
+        case SystemProcessInformation:
+        case SystemExtendedProcessInformation:
+        {
+            if(Hider::IsHidden(pid, HideToolProcesses))
+            {
+
+                // Brittle
+                static const WCHAR* const BlockedNames[] = {
+                    L"x64dbg.exe",
+                    L"x32dbg.exe",
+                    L"apimonitor-x64.exe",
+                    L"apimonitor-x86.exe",
+                    L"procmon.exe",
+                    L"procmon64.exe",
+                    L"procexp.exe",
+                    L"procexp64.exe",
+                    L"wireshark.exe",
+                    L"ida.exe",
+                    L"ida64.exe",
+                    L"idaq.exe",
+                    L"idaq64.exe",
+                    L"scylla_x64.exe",
+                    L"scylla_x86.exe",
+                    L"ollydbg.exe",
+                    L"windbg.exe",
+                    L"windbg64.exe",
+                    L"immunitydebugger.exe",
+                    L"dumpcap.exe",
+                    L"fiddler.exe",
+                    L"httpdebugger.exe",
+                    L"cheatengine-x86_64.exe",
+                    L"cheatengine-x86_64-SSE4-AVX2.exe",
+                    L"protection_id.exe",
+                };
+
+                __try
+                {
+                    PSYSTEM_PROCESS_INFORMATION prev = nullptr;
+                    PSYSTEM_PROCESS_INFORMATION curr = (PSYSTEM_PROCESS_INFORMATION)SystemInformation;
+
+                    while(true)
+                    {
+                        ProbeForRead(curr, sizeof(SYSTEM_PROCESS_INFORMATION), 1);
+
+                        bool blocked = false;
+                        if(curr->ImageName.Buffer != nullptr && curr->ImageName.Length > 0)
+                        {
+                            ProbeForRead(curr->ImageName.Buffer, curr->ImageName.Length, 1);
+                            for(ULONG i = 0; i < ARRAYSIZE(BlockedNames); i++)
+                            {
+                                UNICODE_STRING candidate;
+                                RtlInitUnicodeString(&candidate, BlockedNames[i]);
+                                if(RtlEqualUnicodeString(&curr->ImageName, &candidate, TRUE))
+                                {
+                                    blocked = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if(blocked && prev != nullptr)
+                        {
+                            Log("[TITANHIDE] Hiding tool process '%wZ' from pid %d\r\n", &curr->ImageName, pid);
+                            if(curr->NextEntryOffset == 0)
+                            {
+                                prev->NextEntryOffset = 0;
+                                break;
+                            }
+                            else
+                            {
+                                prev->NextEntryOffset += curr->NextEntryOffset;
+                                curr = (PSYSTEM_PROCESS_INFORMATION)((ULONG_PTR)curr + curr->NextEntryOffset);
+                                continue;
+                            }
+                        }
+                        else if(blocked && prev == nullptr)
+                        {
+                            Log("[TITANHIDE] Hiding tool process '%wZ' from pid %d \r\n", &curr->ImageName, pid);
+                            if(curr->NextEntryOffset == 0)
+                            {
+                                curr->ImageName.Length = 0;
+                                curr->ImageName.Buffer = nullptr;
+                                break;
+                            }
+                            else if(ReturnLength && *ReturnLength > curr->NextEntryOffset)
+                            {
+                                ULONG skipSize  = curr->NextEntryOffset;
+                                ULONG remaining = *ReturnLength - skipSize;
+                                RtlMoveMemory(SystemInformation,
+                                              (PUCHAR)SystemInformation + skipSize,
+                                              remaining);
+                                continue;
+                            }
+                        }
+                        else
+                        {
+                            if(curr->NextEntryOffset == 0)
+                                break;
+                            prev = curr;
+                            curr = (PSYSTEM_PROCESS_INFORMATION)((ULONG_PTR)curr + curr->NextEntryOffset);
+                        }
+                    }
+                }
+                __except(EXCEPTION_EXECUTE_HANDLER)
+                {
+                }
+            }
+            break;
+        }
         case SystemCodeIntegrityInformation:
         {
             if(Hider::IsHidden(pid, HideCodeIntegrityInformation))
